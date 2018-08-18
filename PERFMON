@@ -1,0 +1,240 @@
+#! /bin/bash
+
+lock_path=/var/lock/PERFMON.lock
+
+        if [ -f $lock_path ]; then
+          echo "Process is Already running"
+          exit 0
+        else
+          touch $lock_path
+
+URL=$1
+
+	if [ -z "$URL" ]; then
+
+	URL="http://XXXXAM.net/Service.svc/web/ServiceMonitoring"
+
+	fi
+
+
+if ping -q -c 1 -W 1 google.com 2>&1 1> /dev/null 2> /dev/null; then
+
+if curl --max-time 7 -Is http://XXXXAM.net | head -n 1 | grep "200 OK" > /dev/null; then
+
+	DATE=$(date)
+	MACID=`cat /sys/class/net/eth0/address`
+
+	WANL=`awk '$2 == 00000000 { print $1 }' /proc/net/route | egrep -v 'ipoe|ppp' | head -1`
+
+	#IP=$(ip addr show dev "$WANL" | awk '$1 ~ /^inet/ { sub("/.*", "", $2); print $2 }')
+	IP=`ifconfig $WANL | grep inet | awk -F" " '{print $2}' | awk -F":" '{print $2}'`
+
+	WR11=`cat /sys/class/net/${WANL}/statistics/rx_bytes 2>/dev/null `
+	WT11=`cat /sys/class/net/${WANL}/statistics/tx_bytes 2>/dev/null `
+
+	sleep 1
+
+	WR21=`cat /sys/class/net/${WANL}/statistics/rx_bytes 2>/dev/null `
+	WT21=`cat /sys/class/net/${WANL}/statistics/tx_bytes 2>/dev/null `
+
+	WTBPS=`expr $WT21 - $WT11`
+	WRBPS=`expr $WR21 - $WR11`
+	WANUP=`expr $WTBPS \* 8 2>/dev/null`
+	WANDOWN=`expr $WRBPS \* 8 2>/dev/null`
+
+	UPTIME=`awk '{printf("%d:%02d:%02d:%02d\n",($1/60/60/24),($1/60/60%24),($1/60%60),($1%60))}' /proc/uptime`
+
+	FILEEXIST="/var/www/username2dev.txt"
+	if [ -f "$FILEEXIST" ] ; then
+		HOTSPOT=`cat /var/www/username2dev.txt | grep active | grep hotspot | wc -l`
+		PPPOE=`cat /var/www/username2dev.txt | grep active | grep pppoe | wc -l`
+		IPOE=`cat /var/www/username2dev.txt | grep active | grep ipoe | wc -l`
+		TOTALU=`cat /var/www/username2dev.txt | grep active | wc -l`
+	else
+		HOTSPOT=0
+		PPPOE=0
+		IPOE=0
+		TOTALU=0
+	fi
+
+	TOT=`cat /proc/meminfo | grep MemTotal: | awk '{print $2}'`
+	USED=`cat /proc/meminfo | grep MemFree: | awk '{print $2}'`
+	FREE=$[$TOT - $USED ]
+	TOTMB=$[$TOT / 1024 ]
+	TOTFREE=$[$FREE / 1024 ]
+	USEDPERC=$[$TOTFREE * 100 / $TOTMB ]
+
+	HWMON=`grep -H coretemp /sys/class/hwmon/hwmon*/name | head -1 | awk -F":" '{print $1}' | awk -F"/" '{print $5}'`
+	HWNUMBER=`ls -d -- /sys/class/hwmon/${HWMON}/temp*_input | head -1 | awk -F"temp" '{print $2}' | awk -F"_" '{print $1}'`
+	TEMP_CURR1="temp"${HWNUMBER}"_input"
+	TEMP_MAX1="temp"${HWNUMBER}"_max"
+	TEMP_CURR=`cat /sys/class/hwmon/${HWMON}/${TEMP_CURR1} | awk '{print $1/1000}'`
+	TEMP_MAX=`cat /sys/class/hwmon/${HWMON}/${TEMP_MAX1} | awk '{print $1/1000}'`
+	# echo $TEMP_CURR
+	# echo $TEMP_MAX
+	DISK=$(df -h | awk '$NF=="/"{printf "%s", $5}' | awk -F"%" '{print $1}')
+
+	CPU=`sudo /bin/grep 'cpu ' /proc/stat | awk '{usage=($2+$4)*100/($2+$4+$5)} END {print usage ""}'`
+	LOADAV=$(cat /proc/loadavg | awk '{print $1}')
+
+	VALUESJSONLOC=$MACID","$WANUP","$WANDOWN","$USEDPERC","$DISK","$TEMP_CURR","$TEMP_MAX","$LOADAV","$IP","$HOTSPOT","$PPPOE","$IPOE","$TOTALU","$UPTIME
+
+	VALUESJSON="{\"MAC\":\""${MACID}"\",\"WAN_Bandwidth_upload\":\""$WANUP"\",\"WAN_Bandwidth_download\":\""$WANDOWN"\",\"CPU_Usage\":\""$CPU"\",\"Memory_usage\":\""$USEDPERC"\",\"HardDisk_usage\":\""$DISK"\",\"CPU_Temp\":\""$TEMP_CURR"\",\"CPU_Temp_Max\":\""$TEMP_MAX"\",\"Load_average\":\""$LOADAV"\",\"IPAddress\":\""$IP"\"}"
+	echo $VALUESJSON > /tmp/VALUESJSON.txt
+	#echo $VALUESJSON
+	echo $DATE","$VALUESJSONLOC",NET_UP" >> /var/log/Sysmonitor.log
+
+	#curl -d @/tmp/VALUESJSON.txt -H "Content-Type: application/json" -X POST "http://XXXXAM.net/Service.svc/web/ServiceMonitoring"
+
+	curl --max-time 10 -d @/tmp/VALUESJSON.txt -H "Content-Type: application/json" -X POST $URL
+
+	rm -f /tmp/VALUESJSON.txt
+
+	PRIVIP=`wget --dns-timeout 3 --timeout 10 http://ipinfo.io/ip -qO -`
+	URL2="http://XXXXAM.net/Service.svc/web/GetActiveCount"
+
+	VALUESJSONT="{\"IPoE\":\""${IPOE}"\",\"PPPoE\":\""${PPPOE}"\",\"Hotspot\":\""${HOTSPOT}"\",\"MAC\":\""${MACID}"\",\"NASIP\":\""${IP}"\",\"IP\":\""${IP}"\",\"PrivateIP\":\""${PRIVIP}"\"}"
+	echo $VALUESJSONT > /tmp/VALUESJSONT.txt
+	curl --max-time 10 -d @/tmp/VALUESJSONT.txt -H "Content-Type: application/json" -X POST $URL2
+	rm -f /tmp/VALUESJSONT.txt
+
+	# HDDNEW=`/sbin/hdparm -I /dev/sda | /bin/grep "Serial Number:" | /usr/bin/awk -F" " '{ print $3 }'`
+	# PATNEW=`cat /usr/share/VER | awk -F"." '{print $3"."$4}'`
+	# VERNEW=`cat /usr/share/VER | awk -F"." '{print $1"."$2}'`
+	# KEY=`cat /usr/share/RAND`
+	# URL3="http://XXXXAM.net/Service.svc/web/PiracyCheck"
+
+	# VALUESJSONK="{\"Key\":\""${KEY}"\",\"MAC\":\""${MACID}"\",\"SSHD\":\""${HDDNEW}"\",\"PatchNo\":\""${PATNEW}"\",\"Version\":\""${VERNEW}"\",\"IP\":\""${IP}"\",\"PrivateIP\":\""${PRIVIP}"\"}"
+	# echo $VALUESJSONK > /tmp/VALUESJSONK.txt
+	# curl --max-time 10 -d @/tmp/VALUESJSONK.txt -H "Content-Type: application/json" -X POST $URL3
+	# rm -f /tmp/VALUESJSONK.txt
+
+else
+
+#echo "The network is down or DNS not Configured"
+
+	DATE=$(date)
+	MACID=`cat /sys/class/net/eth0/address`
+
+	WANL=`awk '$2 == 00000000 { print $1 }' /proc/net/route | egrep -v 'ipoe|ppp' | head -1`
+
+	#IP=$(ip addr show dev "$WANL" | awk '$1 ~ /^inet/ { sub("/.*", "", $2); print $2 }')
+	IP=`ifconfig $WANL | grep inet | awk -F" " '{print $2}' | awk -F":" '{print $2}'`
+
+	WR11=`cat /sys/class/net/${WANL}/statistics/rx_bytes 2>/dev/null `
+	WT11=`cat /sys/class/net/${WANL}/statistics/tx_bytes 2>/dev/null `
+
+	sleep 1
+
+	WR21=`cat /sys/class/net/${WANL}/statistics/rx_bytes 2>/dev/null `
+	WT21=`cat /sys/class/net/${WANL}/statistics/tx_bytes 2>/dev/null `
+
+	WTBPS=`expr $WT21 - $WT11`
+	WRBPS=`expr $WR21 - $WR11`
+	WANUP=`expr $WTBPS \* 8 2>/dev/null`
+	WANDOWN=`expr $WRBPS \* 8 2>/dev/null`
+
+	UPTIME=`awk '{printf("%d:%02d:%02d:%02d\n",($1/60/60/24),($1/60/60%24),($1/60%60),($1%60))}' /proc/uptime`
+
+	FILEEXIST="/var/www/username2dev.txt"
+	if [ -f "$FILEEXIST" ] ; then
+		HOTSPOT=`cat /var/www/username2dev.txt | grep active | grep hotspot | wc -l`
+		PPPOE=`cat /var/www/username2dev.txt | grep active | grep pppoe | wc -l`
+		IPOE=`cat /var/www/username2dev.txt | grep active | grep ipoe | wc -l`
+		TOTALU=`cat /var/www/username2dev.txt | grep active | wc -l`
+	else
+		HOTSPOT=0
+		PPPOE=0
+		IPOE=0
+		TOTALU=0
+	fi
+
+	TOT=`cat /proc/meminfo | grep MemTotal: | awk '{print $2}'`
+	USED=`cat /proc/meminfo | grep MemFree: | awk '{print $2}'`
+	FREE=$[$TOT - $USED ]
+	TOTMB=$[$TOT / 1024 ]
+	TOTFREE=$[$FREE / 1024 ]
+	USEDPERC=$[$TOTFREE * 100 / $TOTMB ]
+
+	HWMON=`grep -H coretemp /sys/class/hwmon/hwmon*/name | head -1 | awk -F":" '{print $1}' | awk -F"/" '{print $5}'`
+	HWNUMBER=`ls -d -- /sys/class/hwmon/${HWMON}/temp*_input | head -1 | awk -F"temp" '{print $2}' | awk -F"_" '{print $1}'`
+	TEMP_CURR1="temp"${HWNUMBER}"_input"
+	TEMP_MAX1="temp"${HWNUMBER}"_max"
+	TEMP_CURR=`cat /sys/class/hwmon/${HWMON}/${TEMP_CURR1} | awk '{print $1/1000}'`
+	TEMP_MAX=`cat /sys/class/hwmon/${HWMON}/${TEMP_MAX1} | awk '{print $1/1000}'`
+
+	DISK=$(df -h | awk '$NF=="/"{printf "%s", $5}' | awk -F"%" '{print $1}')
+
+	CPU=`sudo /bin/grep 'cpu ' /proc/stat | awk '{usage=($2+$4)*100/($2+$4+$5)} END {print usage ""}'`
+	LOADAV=$(cat /proc/loadavg | awk '{print $1}')
+
+	VALUESJSONLOC=$MACID","$WANUP","$WANDOWN","$USEDPERC","$DISK","$TEMP_CURR","$TEMP_MAX","$LOADAV","$IP","$HOTSPOT","$PPPOE","$IPOE","$TOTALU","$UPTIME
+
+	echo $DATE","$VALUESJSONLOC",SITE_DOWN" >> /var/log/Sysmonitor.log
+fi
+
+else
+
+	DATE=$(date)
+	MACID=`cat /sys/class/net/eth0/address`
+
+	WANL=`awk '$2 == 00000000 { print $1 }' /proc/net/route | egrep -v 'ipoe|ppp' | head -1`
+
+	#IP=$(ip addr show dev "$WANL" | awk '$1 ~ /^inet/ { sub("/.*", "", $2); print $2 }')
+	IP=`ifconfig $WANL | grep inet | awk -F" " '{print $2}' | awk -F":" '{print $2}'`
+
+	WR11=`cat /sys/class/net/${WANL}/statistics/rx_bytes 2>/dev/null `
+	WT11=`cat /sys/class/net/${WANL}/statistics/tx_bytes 2>/dev/null `
+
+	sleep 1
+
+	WR21=`cat /sys/class/net/${WANL}/statistics/rx_bytes 2>/dev/null `
+	WT21=`cat /sys/class/net/${WANL}/statistics/tx_bytes 2>/dev/null `
+
+	WTBPS=`expr $WT21 - $WT11`
+	WRBPS=`expr $WR21 - $WR11`
+	WANUP=`expr $WTBPS \* 8 2>/dev/null`
+	WANDOWN=`expr $WRBPS \* 8 2>/dev/null`
+
+	UPTIME=`awk '{printf("%d:%02d:%02d:%02d\n",($1/60/60/24),($1/60/60%24),($1/60%60),($1%60))}' /proc/uptime`
+
+	FILEEXIST="/var/www/username2dev.txt"
+	if [ -f "$FILEEXIST" ] ; then
+		HOTSPOT=`cat /var/www/username2dev.txt | grep active | grep hotspot | wc -l`
+		PPPOE=`cat /var/www/username2dev.txt | grep active | grep pppoe | wc -l`
+		IPOE=`cat /var/www/username2dev.txt | grep active | grep ipoe | wc -l`
+		TOTALU=`cat /var/www/username2dev.txt | grep active | wc -l`
+	else
+		HOTSPOT=0
+		PPPOE=0
+		IPOE=0
+		TOTALU=0
+	fi
+
+	TOT=`cat /proc/meminfo | grep MemTotal: | awk '{print $2}'`
+	USED=`cat /proc/meminfo | grep MemFree: | awk '{print $2}'`
+	FREE=$[$TOT - $USED ]
+	TOTMB=$[$TOT / 1024 ]
+	TOTFREE=$[$FREE / 1024 ]
+	USEDPERC=$[$TOTFREE * 100 / $TOTMB ]
+
+	HWMON=`grep -H coretemp /sys/class/hwmon/hwmon*/name | head -1 | awk -F":" '{print $1}' | awk -F"/" '{print $5}'`
+	HWNUMBER=`ls -d -- /sys/class/hwmon/${HWMON}/temp*_input | head -1 | awk -F"temp" '{print $2}' | awk -F"_" '{print $1}'`
+	TEMP_CURR1="temp"${HWNUMBER}"_input"
+	TEMP_MAX1="temp"${HWNUMBER}"_max"
+	TEMP_CURR=`cat /sys/class/hwmon/${HWMON}/${TEMP_CURR1} | awk '{print $1/1000}'`
+	TEMP_MAX=`cat /sys/class/hwmon/${HWMON}/${TEMP_MAX1} | awk '{print $1/1000}'`
+
+	DISK=$(df -h | awk '$NF=="/"{printf "%s", $5}' | awk -F"%" '{print $1}')
+
+	CPU=`sudo /bin/grep 'cpu ' /proc/stat | awk '{usage=($2+$4)*100/($2+$4+$5)} END {print usage ""}'`
+	LOADAV=$(cat /proc/loadavg | awk '{print $1}')
+
+	VALUESJSONLOC=$MACID","$WANUP","$WANDOWN","$USEDPERC","$DISK","$TEMP_CURR","$TEMP_MAX","$LOADAV","$IP","$HOTSPOT","$PPPOE","$IPOE","$TOTALU","$UPTIME
+
+	echo $DATE","$VALUESJSONLOC",NET_DOWN" >> /var/log/Sysmonitor.log
+
+fi
+
+         rm -f $lock_path
+fi
