@@ -1,0 +1,36 @@
+#!/bin/bash
+
+ETH='enp2s0f0'
+
+OPERSTATE=$(cat /sys/class/net/${ETH}/operstate)
+#echo $OPERSTATE
+# need to make sure the eth is a known state before we start
+# if the eth is not inserted on boot then we need to disable it first
+if [ "$OPERSTATE" == "down" ]; then
+	ETH_STATE="1"
+	ip link set "up" ${ETH}
+else
+	ETH_STATE=$(cat /sys/class/net/${ETH}/carrier)
+fi
+
+onChange () {
+	if [ "$ETH_STATE" == "1" ]; then
+		SET="up"
+	else
+		SET="down"
+	fi
+	ip link set ${SET} ${ETH}
+}
+
+while true; do	
+	NEW_ETH_STATE=$(cat /sys/class/net/${ETH}/carrier)
+
+	if [ "$NEW_ETH_STATE" == "$ETH_STATE" ]; then
+		ETH_STATE=$NEW_ETH_STATE
+		onChange
+	fi
+	
+	#echo $NEW_ETH_STATE
+	
+	sleep 5
+done
